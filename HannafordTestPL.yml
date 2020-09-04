@@ -1,0 +1,362 @@
+# Build/Release pipeline for Hannaford project
+# - In Build stage: Python package along with config data and main python script is collected after testing as artifact.
+# - In Deploy stage: Model files are deployed to DataBricks cluster, rules are generated and updated in cosmosDB
+# https://docs.microsoft.com/azure/devops/pipelines/languages/python.
+
+parameters:
+#  - name: TrainingFuncUpdateStages
+#    type: string
+#    default: 'refs/heads/staging'
+#  - name: TestStages
+#    type: string
+#    default: 'refs/heads/staging'
+#  - name: ApproveStage
+#    type: string
+#    default: 'refs/heads/staging'
+
+
+schedules: 
+- cron: "0 3 * * *"  
+  displayName: Daily midnight build  
+  branches:  
+    include:
+    - staging
+  always: true
+
+trigger:
+  branches:
+    include:
+    - staging
+    - feature/rajat_approval_test
+
+variables:
+# Agent VM image name
+  vmImageName: 'ubuntu-16.04'
+  # Python version: 3.7
+  pythonVersion: '3.7'
+
+  resource_id: "/subscriptions/$(databricks_rg_subscriptionid)/resourceGroups/$(databricks_rg)/providers/Microsoft.Databricks/workspaces/$(databricks_workspacename)"
+
+  ${{ if startsWith(variables['Build.SourceBranch'], 'refs/heads/feature/') }}: # Dev
+    ServiceConnection: hypertest1
+    ClusterID: $(devclusterid)
+    KeyVaultName: $(devkeyvault)
+    EnvType: 'dev'
+    dbfs_dir: $(dbfs_dev)
+    azdb_personal_token: $(databricks_pat_dev)
+    funcAppName: $(dev_funcAppName)  #rs06ue2dipaafp-hp02
+    funcAppRG: $(dev_func_resource_group)
+    funcSubsID : $(dev_func_subscription_id)
+    databricks_rg_subscriptionid: $(dev_subscriptionid)
+    databricks_rg: $(dev_rgname) #RS06UE2DInformationPlatform-RG01
+    databricks_workspacename: $(dev_db_workspace_name) #rs06ue2dipadb02
+    client_id: $(svcp_dev_client_id)
+    client_secret: $(svcp_dev_client_secret)
+    tenant_id: $(svcp_dev_tenant_id)
+    training_flags: $(dev_training_flags)
+    loglevel: $(dev_log_level)
+    jobdelayminutes: $(dev_jobdelayminutes)
+    # section for the Function App test Credentials, explicitly needed since QA and Dev SVCP credentials are the same 
+    # as the DEV Databricks WS is being used for both the DEV and Staging branches
+    # uncomment as and when you want to test out features on the dev branch
+    fnApp_Client_Id: $(dev_func_client_id)
+    fnApp_Client_Secret: $(dev_func_client_secret)
+    fnApp_Tenant_Id: $(dev_func_tenant_id)
+
+    # to be deleted as this will not be applicable;    
+    from_cosmosdb_uri: $(DEV_FROM_MONGO_URI)
+    to_cosmosdb_uri: $(DEV_TO_MONGO_URI)
+    DEPLOYSTAGE_SVCCON: hypertest1  #Prod Function app is used as we move collections from Staging to Prod
+    DEPLOYSTAGE_FN: $(dev_funcAppName) 
+    DEPLOYSTAGE_FNRG: $(dev_func_resource_group)
+    COLLECTION_MOVEMENT_NOTEBOOK_PATH: $(notebook_path)
+
+  ${{ if startsWith(variables['Build.SourceBranch'], 'refs/heads/staging') }}:  # QA
+    ServiceConnection: saq_hyperp  # set to dev as we are using dev functions for testing.
+    ClusterID: $(qaclusterid)
+    KeyVaultName: $(devkeyvault)
+    EnvType: 'qa'
+    dbfs_dir: $(dbfs_qa)
+    azdb_personal_token:  $(databricks_pat_dev)  # workspace shared between dev and QA, QA cluster is in same workspace as dev cluster
+    funcAppName: $(QA_funcAppName) #rs08ue2dipaafp-hp02
+    funcAppRG: $(qa_func_resource_group)
+    funcSubsID : $(qa_func_subscription_id)
+    databricks_rg_subscriptionid: $(QA_subscriptionid)
+    databricks_rg: $(QA_rgname)  #RS08UE2QInformationPlatform-RG01
+    databricks_workspacename: $(QA_db_workspace_name) #rs08ue2dipadb01
+    client_id: $(svcp_QA_client_id)
+    client_secret: $(svcp_QA_client_secret)
+    tenant_id: $(svcp_QA_tenant_id)
+    training_flags: $(qa_training_flags)
+    loglevel: $(qa_log_level)
+    jobdelayminutes: $(qa_jobdelayminutes)
+    # section for the Function App test Credentials, explicitly needed since QA and Dev SVCP credentials are the same 
+    # as the DEV Databricks WS is being used for both the DEV and Staging branches
+    fnApp_Client_Id: $(qa_func_client_id)
+    fnApp_Client_Secret: $(qa_func_client_secret)
+    fnApp_Tenant_Id: $(qa_func_tenant_id)
+    # section for the production deployment, this will ALWAYS BE APPLICABLE ONLY FOR THE STAGING BRANCH
+    # from_cosmosdb_uri: $(PROD_FROM_MONGO_URI)
+    # to_cosmosdb_uri: $(PROD_TO_MONGO_URI)
+    DEPLOYSTAGE_SVCCON: sap_hyperp  #Prod Function app is used as we move collections from Staging to Prod
+    DEPLOYSTAGE_FN: $(prod_funcAppName) 
+    DEPLOYSTAGE_FNRG: $(prod_func_resource_group)
+    COLLECTION_MOVEMENT_NOTEBOOK_PATH: $(notebook_path)
+
+  ${{ if eq(variables['Build.Reason'], 'PullRequest') }}:  # PR- QA
+    ServiceConnection: hypertest1
+    ClusterID: $(qaclusterid)
+    KeyVaultName: $(devkeyvault)
+    EnvType: 'qa'
+    dbfs_dir: $(dbfs_qa)
+    azdb_personal_token:  $(databricks_pat_dev)
+    funcAppName: $(QA_funcAppName) #rs06ue2dipaafp-hp02
+    funcAppRG: $(qa_func_resource_group)
+    funcSubsID : $(qa_func_subscription_id)
+    databricks_rg_subscriptionid: $(QA_subscriptionid)
+    databricks_rg: $(QA_rgname) #RS08UE2QInformationPlatform-RG01
+    databricks_workspacename: $(QA_db_workspace_name) #rs08ue2dipadb01
+    client_id: $(svcp_QA_client_id)
+    client_secret: $(svcp_QA_client_secret)
+    tenant_id: $(svcp_QA_tenant_id)
+    training_flags: $(pr_training_flags)
+    loglevel: $(qa_log_level)
+    jobdelayminutes: $(pr_jobdelayminutes)
+
+  # ${{ if startsWith(variables['Build.SourceBranch'], 'refs/heads/master/') }}:  # Prod
+  #   ServiceConnection: sap_hyperp
+  #   ClusterID: $(devclusterid) # these values has to be changed
+  #   KeyVaultName: $(devkeyvault)
+  #   EnvType: 'prod'
+  #   dbfs_dir: $(dbfs_prod)
+  #   azdb_personal_token:  $(databricks_pat_prod) # this has to be changed with proper token from prod workspace
+  #   funcAppName: $(prod_funcAppName) #rs05ue2dipaafp-hp02
+  #   funcAppRG: $(prod_func_resource_group)
+  #   funcSubsID : $(prod_func_subscription_id)
+  #   databricks_rg_subscriptionid: $(prod_subscriptionid)
+  #   databricks_rg: $(prod_rgname) #RS05UE2PInformationPlatform-RG01
+  #   databricks_workspacename: $(prod_db_workspace_name) #rs05ue2pipadb01 or rs05ue2pipadb02
+  #   client_id: $(svcp_prod_client_id)
+  #   client_secret: $(svcp_prod_client_secret)
+  #   tenant_id: $(svcp_prod_tenant_id)
+  #   training_flags: $(prod_training_flags)
+  #   loglevel: $(prod_log_level)
+  #   jobdelayminutes: $(prod_jobdelayminutes)
+
+
+stages:
+- stage: BuildStage
+  displayName: Build Stage
+  jobs:
+  - job: BuildArtifact
+    pool:
+      vmImage: $(vmImageName)  
+    displayName: Build Artifact Stage
+    steps:
+    - task: UsePythonVersion@0
+      displayName: "Setting python version to 3.7 as required by functions"
+      inputs:
+        versionSpec: $(pythonVersion)
+        architecture: 'x64'
+    # TODO: Run unit tests before creating package
+    # Create Whl package file
+    # Create the version txt file from the Build Source Version before generating the pkg
+    # setup.py will take care of reading the version and applying the same
+      # to the package being generated
+    - script: |
+        pip install wheel
+        echo -e "$(Build.SourceVersion)" > version.txt
+        python setup.py bdist_wheel
+      displayName: 'python setup.py bdist_wheel'
+    # Copy all the required files to bin folder
+    # TODO: copy directly to staging directory using copyFIles@2
+    - task: PowerShell@2
+      displayName: 'Run Build.ps1 to collect required files'
+      inputs:
+        filePath: '$(System.DefaultWorkingDirectory)/services/Build.ps1'
+    # Copy files to artifact staging directory and publish
+    - task: CopyFiles@2
+      displayName: 'Copy Files to: $(Build.ArtifactStagingDirectory)'
+      inputs:
+        contents: |
+          **/bin/**
+          **/services/**
+        targetFolder: $(Build.ArtifactStagingDirectory)
+    - publish: $(Build.ArtifactStagingDirectory)
+      artifact: $(Build.SourceBranchName)
+
+- stage: DeployStage
+  dependsOn: [BuildStage]
+  condition: succeeded()
+  jobs:
+  - template: release-template.yml  # Template reference
+
+- stage: AgentLessWait
+  dependsOn: DeployStage
+  displayName: Wait for Job Running to Complete
+  jobs:
+    - job: RunsOnServer
+      pool: server
+      steps:
+      - task: Delay@1
+        inputs:
+          delayForMinutes: $(jobdelayminutes)
+
+- stage: PostJobTrainingWaitPeriod
+  dependsOn: 
+  - DeployStage
+  - AgentLessWait
+  displayName: Run Post Wait Activities
+  jobs:
+    - job: CheckJobId 
+      displayName: Fetch Job status and the run id generated          
+      pool:
+        vmImage: $(vmImageName)
+      variables:        
+        jobid: $[ stageDependencies.DeployStage.processJobid.outputs['setjobid.mainid'] ]                
+      steps:
+        - download: current
+          artifact: $(Build.SourceBranchName)
+          displayName: Download Build Artefacts
+        - task: UsePythonVersion@0
+          displayName: 'Select Python version $(pythonVersion)'
+          inputs:
+              versionSpec: $(pythonVersion)
+        - script: |
+              python -m pip install databricks-cli==0.11.0              
+          displayName: Install databricks cli
+        - task: PowerShell@2
+          displayName: 'Setup Databricks Cli Session'          
+          name: pwshdbjobtask
+          inputs:
+            failOnStderr: true
+            targetType: inline
+            script: |
+              Write-Output "JOB ID from the Deploy stage is $env:JOBID"
+              Write-Output "dot sourcing the token setter script to setup DB CLI session"
+              . $(Pipeline.Workspace)/$(Build.SourceBranchName)/services/dataBricksCliWithSP.ps1
+              
+              Write-Output "Calling the function defined in the token setter script"
+              $retVal = Setup-Databricks-Cli-Session -dbconfigloc ($HOME) -client_id $(client_id) -client_secret $(client_secret) -tenant_id $(tenant_id) -domain $(domain) -resource_id $(resource_id)            
+              
+              Write-Output "Defining the control variables for the next stage. Default should be negative, so that next stages do not run, unless the logic below sets them up to positive"
+
+              Write-Host "##vso[task.setvariable variable=jobrunid;isOutput=true]0"
+              Write-Host "##vso[task.setvariable variable=job_status;isOutput=true]false"
+
+              Write-Output "Fetching the details of the job that we executed in the deploy stage"
+
+              $dbjobdetails = databricks runs list --job-id $env:JOBID --output json | ConvertFrom-Json
+              
+              Write-Output $dbjobdetails
+              
+              $jobstatus = $dbjobdetails.runs.state.result_state
+              
+              Write-Output "If the job has completed after the agentless wait period, then the runid must have been created within the $env:JOBID.txt file. Fetching that"
+              
+              if (($jobstatus -eq "SUCCESS") -or ($jobstatus -eq "SUCCEEDED")){
+                  if($env:TRAINING_FLAGS.IndexOf("--write-to-cosmos") -eq -1){
+                    Write-Output "Write to cosmos is not enabled as such the $env:JOBID.txt will not be generated"
+                  }
+                  else{
+                    $filecopy = dbfs cp $(dbfs_dir)/$env:JOBID.txt $(Pipeline.Workspace)/$(Build.SourceBranchName)/services
+                    if(($filecopy -ne $null) -and ($filecopy.ToLower().Contains("error"))){
+                      Write-Output $filecopy
+                      throw "Cannot proceed without the job's run id"
+                    }
+                    else{
+                      ls -ltra $(Pipeline.Workspace)/$(Build.SourceBranchName)/services/
+                      $runid = Get-Content $(Pipeline.Workspace)/$(Build.SourceBranchName)/services/$env:JOBID.txt
+                      Write-Output $runid
+                      Write-Host "##vso[task.setvariable variable=jobrunid;isOutput=true]$runid"
+                      Write-Host "##vso[task.setvariable variable=job_status;isOutput=true]true"                      
+                      dbfs rm -r $(dbfs_dir)
+                    }                  
+                  }                                  
+              }
+              else{                  
+                  Write-Output "JOB $env:JOBID has not succeeded or has not completed yet, next formalities to done manually"
+                  throw "Stop processing remaining steps and stages"
+              }          
+
+# note the different way in which the conditions has been mentioned in the stage as compared to the job variable.
+# This is a known issue/mechanics to specify the dependencies and the values
+
+- ${{ if contains( parameters.TrainingFuncUpdateStages, variables['Build.SourceBranch'] ) }}:
+  - stage: UpdateTrainedEnvironmentsFunctionAppID
+    dependsOn: PostJobTrainingWaitPeriod  
+    condition: and(succeeded(), ne(stageDependencies.PostJobTrainingWaitPeriod.outputs['CheckJobId.pwshdbjobtask.jobrunid'],'0'), ne(stageDependencies.PostJobTrainingWaitPeriod.outputs['CheckJobId.pwshdbjobtask.job_status'],'false'))
+    displayName: Update Function App RUN ID setting of the Environment on which the job was run
+    jobs:
+      - job: UpdateDBJobFunctionApp
+        variables:
+          run_value: $[ stageDependencies.PostJobTrainingWaitPeriod.CheckJobId.outputs['pwshdbjobtask.jobrunid'] ]
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          - task: AzureAppServiceSettings@1
+            inputs:
+              azureSubscription: $(ServiceConnection) 
+              appName: $(funcAppName)
+              resourceGroupName: $(funcAppRG)
+              appSettings: |
+                [
+                {
+                  "name": "RUN_ID",
+                  "value": "$(run_value)",
+                  "slotSetting": false
+                  }
+                ]
+
+- ${{ if contains( parameters.TestStages, variables['Build.SourceBranch'] ) }}:
+  - stage: RunTests
+    dependsOn: UpdateTrainedEnvironmentsFunctionAppID
+    condition: succeeded()
+    displayName: Running Functional Tests  
+    pool:
+      vmImage: $(vmImageName)
+    jobs:    
+      - template: ./services/RunTests/end_to_end/azure-pipelines.yml
+        parameters:        
+          funcAppName: $(funcAppName)
+          fnAppRg: $(funcAppRG)
+          funcSubsID: $(funcSubsID)
+          fn_Login_CLIENT_ID : $(fnApp_Client_Id)
+          fn_Login_CLIENT_SECRET: $(fnApp_Client_Secret)
+          fn_Login_TENANT_ID : $(fnApp_Tenant_Id)
+      - template: ./services/RunTests/api_load_test/azure-pipelines.yml
+        parameters:
+          funcAppName: $(funcAppName)
+          fnAppRg: $(funcAppRG)
+          funcSubsID: $(funcSubsID)
+          fn_Login_CLIENT_ID : $(fnApp_Client_Id)
+          fn_Login_CLIENT_SECRET: $(fnApp_Client_Secret)
+          fn_Login_TENANT_ID : $(fnApp_Tenant_Id)
+      # IMPORTANT : Use the below and comment the above once we have multiple agents available        
+      # - template: $(System.DefaultWorkingDirectory)/services/RunTests/run-tests.yml
+      #   parameters:
+      #     ORGANIZATION_URL : "https://dev.azure.com/Hyper-Personalization"
+      #     PROJECT_NAME : "XSell Recommendations"
+      #     funcAppName: $(funcAppName)
+      #     funcAppRG: $(funcAppRG)
+      #     funcSubsID: $(funcSubsID)
+
+- ${{ if contains( parameters.ApproveStage, variables['Build.SourceBranch'] ) }}:
+  - stage: WaitApprovalAndDeployToProd
+    dependsOn: 
+    - PostJobTrainingWaitPeriod
+    - RunTests
+    condition: succeeded()
+    displayName: Approve and deploy to production
+    variables:
+      collectionid: $[ stageDependencies.PostJobTrainingWaitPeriod.CheckJobId.outputs['pwshdbjobtask.jobrunid'] ]
+    jobs:    
+      - template: ./services/production-jobs/collectionmovement.yml
+        parameters:
+          COLLECTION_ID : $(collectionid)          
+          DEPLOYSTAGE_SVCCON: $(DEPLOYSTAGE_SVCCON)
+          DEPLOYSTAGE_FN: $(DEPLOYSTAGE_FN)
+          DEPLOYSTAGE_FNRG: $(DEPLOYSTAGE_FNRG)
+          NOTEBOOK_PATH: $(COLLECTION_MOVEMENT_NOTEBOOK_PATH)
+          FROM_COSMOS_DB_URI: $(from_cosmosdb_uri)
+          TO_COSMOS_DB_URI: $(to_cosmosdb_uri)     
